@@ -7,11 +7,16 @@ from fastapi.responses import HTMLResponse
 
 import manager, home
 
+from scene import device
 
 PORT = 8000
+DEVICES = (
+        device.SceneManager,
+        manager.BroadcastDevice,
+    )
 
 app = FastAPI(host='127.0.0.1')
-host = manager.Host()
+host = manager.Host(devices=DEVICES)
 
 
 # @app.on_event("startup")

@@ -52,8 +52,6 @@ class ConnectionManager(object):
         self.active_connections: List[WebSocket] = []
         self.uuid_counter = 0
 
-
-
     async def accept_socket(self, websocket, client_id):
         print('Accepting socket')
         # await websocket.accept()
@@ -72,11 +70,9 @@ class ConnectionManager(object):
 
                 print(f'Signal close receive of {client_id}')
                 await self.disconnect_socket(websocket, client_id)
-
         except WebSocketDisconnect as err:
             print('Client disconnect', err)
             await self.disconnect_socket(websocket, client_id)
-
 
     async def disconnect_socket(self, websocket, client_id):
         await self.broadcast(f"Client #{client_id} left the chat",
@@ -108,17 +104,19 @@ class ConnectionManager(object):
         """Direct input from the socket, farm to owner and continue.
         return a continue 1 or STOP 0
         """
-        print('ConnectionManager Accept packet')
-        packet = await self.convert_message(message, sender)
-        print('ConnectionManager digest packet:', packet)
-        await self.digest_packet(packet)
-        return 1
+        return await self.general_message(message, sender)
 
     async def receive_binary(self, chunk: bytes, sender: WebSocket):
         """Direct input from the socket, farm to owner and continue.
         return a continue 1 or STOP 0
         """
         print('ConnectionManager Accept binary chunk')
+        return await self.general_message(chunk.decode('utf'), sender)
+
+    async def general_message(self, message, sender:WebSocket):
+        packet = await self.convert_message(message, sender)
+        print('ConnectionManager general_message:', packet)
+        await self.digest_packet(packet)
         return 1
 
     async def receive(self, event: dict, sender: WebSocket):
@@ -147,27 +145,63 @@ class ConnectionManager(object):
         digest and iterate into the framework
         """
         print('ConnectionManager digest:', packet, 'and broadcast')
-        await self.broadcast(packet.message, exclude=(packet.owner,))
+        await self.all_devices('digest_packet', packet)
+        # await self.broadcast(packet.message, exclude=(packet.owner,))
+
+    async def all_devices(self, method_name, *a, **kw):
+        for device in self.devices:
+            print('Run', device, method_name, a, kw)
+            await getattr(device, method_name)(*a, **kw)
 
 
 class PacketManager(ConnectionManager):
     # await host.send_personal_message(f"You wrote: {data}", websocket)
     # await host.broadcast(f"Client #{client_id} says: {data}")
 
-    def __init__(self):
+    units = None
+    devices = None
+    def __init__(self, devices=None):
         print('New PacketManager')
         super().__init__()
-        self.devices = ()
+        self.units = devices or ()
+        self.devices= ()
 
     async def mount(self):
         print('Host Mount')
-        units = ()
-        for unit in units:
+        for unit in self.units or ():
             await self.mount_unit(unit)
 
     async def mount_unit(self, device_class):
         dev = device_class()
+        await dev.add_host(self)
         self.devices += (dev,)
 
-
 Host = PacketManager
+
+
+
+class Device(object):
+
+    host = None
+
+    async def add_host(self, host):
+        self.host = host
+
+    async def receive_text(self, message: str, sender: WebSocket):
+        pass
+
+    async def receive_binary(self, chunk: bytes, sender: WebSocket):
+        pass
+
+    async def digest_packet(self, packet: Packet):
+        """Check if the scene sent this message.
+        """
+        pass
+
+
+class BroadcastDevice(Device):
+
+    async def digest_packet(self, packet: Packet):
+        print('BroadcastDevice digest:', packet, 'and broadcast')
+        await self.host.broadcast(packet.message, exclude=(packet.owner,))
+
