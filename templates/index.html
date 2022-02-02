@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Client.</title>
+</head>
+<body>
+        <h1>WebSocket Chat</h1>
+        <h2>Your ID: <span id="ws-id"></span></h2>
+        <button class="connect">Connect</button>
+
+        {#
+
+        <form action="" onsubmit="sendMessage(event)">
+            <!-- <input type="text" id="messageText" autocomplete="off"/> -->
+            <textarea name="messageText" id="messageText" cols="30" rows="10"></textarea>
+            <button>Send</button>
+        </form>
+
+        <div class="buttons">
+            <div class="button">
+                <span>New Scene</span>
+                <button class="copy">Copy</button>
+                <pre>{"new_network":1257,"root":1179,"unit":"World"}</pre>
+            </div>
+            <div class="button">
+                <span>New Client</span>
+                <button class="copy">Copy</button>
+                <pre>{"unit":"Client", "name": "terry"}</pre>
+            </div>
+            <div class="button">
+                <span>New Client</span>
+                <button class="copy">Copy</button>
+                <pre>{"action": "bind", "client": integer, "scenes": [1179] }</pre>
+            </div>
+
+        </div>
+        #}
+
+
+        <div class="templates">
+            <div class="ws-action-container">
+                <div class="ws-action">
+                    <button @click='sendSlot' class="send">Send</button>
+                    Action <slot></slot>
+                </div>
+            </div>
+        </div>
+
+        {% raw %}
+
+        <div id="index_app">
+            <ul>
+                <li v-for='item in global.boundScenes'>{{ item }}</li>
+            </ul>
+            <div class="name-input">
+                <span>Your name</span>
+                <input type="text" v-model=clientName />
+            </div>
+            <form action="" @submit='sendForm'>
+                <!-- <input type="text" id="messageText" autocomplete="off"/> -->
+                <textarea v-model='currentMessage'
+                    cols="30" rows="10"></textarea>
+                <button @click=sendMessage>Send</button>
+            </form>
+
+            <div class="actions">
+                <ws-action>{"new_network":1257,"root":1179,"unit":"World"}</ws-action>
+                <ws-action>{"unit":"Client", "name": "{{clientName}}"}</ws-action>
+                <ws-action :class='{"not-ready": global.scenes.length == 0}'>{"action": "bind", "client": {{ global.clientId }}, "scenes": {{ global.scenes }} }</ws-action>
+                <ws-action :class='{"not-ready": global.boundScenes.length == 0}'>{"action": "create", "entity": "Camera", "scenes":  {{ Array.from(global.boundScenes) }}, "options": { "add_child": true }, "params": { "translation": "Vector3(.5, 1.3, 4)" }}</ws-action>
+            </div>
+
+        </div>
+
+        {% endraw %}
+        <ul id='messages'></ul>
+
+
+        <script src="static/jquery-3.6.0.min.js"></script>
+        <script src="/static/index_socket.js"></script>
+        <script src="/static/vue.global.js"></script>
+        <script src="/static/events.js"></script>
+        <script src="/static/index_app.js"></script>
+
+
+        <link rel="stylesheet" href="/static/css/base.css">
+</body>
+</html>

@@ -1,50 +1,11 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from typing import List
 import json
-
-class Packet(object):
-    """A message from external converted to an internal message, ready for
-    digest through the waiting components.
-    """
-
-    def __init__(self, message: str, owner: WebSocket, uuid:None):
-        self.message = message
-        self.owner = owner
-        self.json = None
-        self.uuid = uuid
-
-    def get_json(self):
-        if self.json is None:
-            self.json = self.convert()
-        return self.json
-
-    def convert(self):
-        """Convert the internal message to the dict format for application
-        digest.
-        """
-        if self.is_json():
-            return self._from_json()
-        return self._from_text()
-
-    def __getitem__(self, k):
-        return self.convert().get(k)
-
-    def _from_json(self):
-        return json.loads(self.message)
-
-    def _from_text(self):
-        """Convert the special packet into a json dict.
-        """
-        # raise NotImplemented()
-        return {"text": self.message}
-
-    def is_json(self):
-        m = self.message
-        return len(m) > 1 and (m[0] == '{' and m[-1] == '}')
-
-    def __str__(self):
-        return f"Packet({self.uuid}): {self.message}"
-
+from functools import lru_cache
+import events
+from packet import Packet
+from message import easy_send
+from device import Device
 
 class ConnectionManager(object):
 
@@ -77,17 +38,21 @@ class ConnectionManager(object):
     async def disconnect_socket(self, websocket, client_id):
         await self.broadcast(f"Client #{client_id} left the chat",
             exclude=(websocket,))
-        self.disconnect(websocket)
+        await self.disconnect(websocket)
 
     async def connect(self, websocket: WebSocket):
         print('--- ConnectionManager::connect (websocket.accept)')
+        websocket.uuid = id(websocket)
         await websocket.accept()
         self.active_connections.append(websocket)
+        await self.all_devices('connect_accept', websocket)
+
         return 1
 
-    def disconnect(self, websocket: WebSocket):
+    async def disconnect(self, websocket: WebSocket):
         print('Forget', websocket)
         self.active_connections.remove(websocket)
+        await self.all_devices('disconnect', websocket)
 
     async def send_personal_message(self, message: str, websocket: WebSocket):
         await websocket.send_text(message)
@@ -99,6 +64,14 @@ class ConnectionManager(object):
             if websocket in exclude:
                 continue
             await websocket.send_text(message)
+
+    async def broadcast_json(self, _exclude=None, **content):
+        exclude = _exclude or ()
+        print('ConnectionManager broadcast JSON to')
+        for websocket in self.active_connections:
+            if websocket in exclude:
+                continue
+            await websocket.send_json(content)
 
     async def receive_text(self, message: str, sender: WebSocket):
         """Direct input from the socket, farm to owner and continue.
@@ -176,27 +149,8 @@ class PacketManager(ConnectionManager):
         await dev.add_host(self)
         self.devices += (dev,)
 
+
 Host = PacketManager
-
-
-
-class Device(object):
-
-    host = None
-
-    async def add_host(self, host):
-        self.host = host
-
-    async def receive_text(self, message: str, sender: WebSocket):
-        pass
-
-    async def receive_binary(self, chunk: bytes, sender: WebSocket):
-        pass
-
-    async def digest_packet(self, packet: Packet):
-        """Check if the scene sent this message.
-        """
-        pass
 
 
 class BroadcastDevice(Device):

@@ -76,6 +76,15 @@ class ConnectionManager(object):
         # await self.broadcast(f"In: {message}")
         return 1
 
+    async def receive_binary(self, message: bytes, sender: WebSocket):
+        """Direct input from the socket, farm to owner and continue.
+        return a continue 1 or STOP 0
+        """
+        packet = await self.convert_message(message, sender)
+        await self.digest_packet(packet)
+        # await self.broadcast(f"In: {message}")
+        return 1
+
     async def convert_message(self, message: str, websocket:WebSocket):
         self.uuid_counter+=1
 
