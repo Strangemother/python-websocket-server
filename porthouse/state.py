@@ -5,6 +5,8 @@ socket through shared paths.
 
 
 class PairStateMixin(object):
+    init_value = None
+
     def set_pair_state(self, acceptor_pos, internal_pos, websocket):
         _id = id(websocket)
         st = self._states[_id] = (acceptor_pos, internal_pos,)
@@ -13,8 +15,11 @@ class PairStateMixin(object):
         """Get the internal pair state
         """
         _id = id(websocket)
-        st = self._states.get(_id, (0, None,))
+        st = self._states.get(_id, self.get_pair_state_default())
         return st
+
+    def get_pair_state_default(self) -> tuple:
+        return (0, self.init_value,)
 
     def set_internal_position(self, internal_pos, websocket):
         """
@@ -30,6 +35,7 @@ class PairStateMixin(object):
         self._states[_id] = nv
         # st = self._states[_id] = (acceptor_pos, internal_pos,)
         return nv
+
 
 
 class Lobby(PairStateMixin):
@@ -67,7 +73,8 @@ class Lobby(PairStateMixin):
             acceptor = self.acceptors[acceptor_position]
         except IndexError as e:
             # no acceptor functions.
-            return self.no_acceptors(None, micro_pos, acceptor_pos, websocket, last_data)
+            return await self.no_acceptors(None, micro_position, acceptor_position, websocket, last_data)
+
         return await acceptor.inbound(websocket, last_data=last_data)
 
     async def tell_service(self, **kw):
@@ -90,6 +97,7 @@ class Lobby(PairStateMixin):
                 data=data,
                 action='push_message',
                 )
+
         # Get the current (micro) state; run through the functions until each resolve.
         acceptor_position, micro_position = self.get_pair_state(websocket)
 
@@ -174,6 +182,160 @@ class Lobby(PairStateMixin):
         return False, 0# micro_position
 
 
+class KeyLobby(Lobby):
+    """Define functions by key, and move the user manually through assigned names.
+    """
+    def __init__(self, name=None, state_index=None, acceptors=None):
+        super().__init__(name, state_index, acceptors)
+
+        r = {}
+        for acceptor in self.acceptors:
+            r[acceptor.name] = acceptor
+        self.named_acceptors = r
+
+    async def push_message(self, data, websocket):
+        """A message inbound at this current position.
+        If the user has presented the correct message, approve - else deny.
+
+        Must return a 'keep alive' bool, else the socket is dropped.
+        """
+
+        # get id state
+        # push through function
+        # approve, deny, move
+
+        print(f'{self.name}.push_message. State:', data, websocket)
+        await self.tell_service(
+                owner=websocket,
+                data=data,
+                action='push_message',
+                )
+
+        # Get the current (micro) state; run through the functions until each resolve.
+        acceptor_position, micro_position = self.get_pair_state(websocket)
+
+        try:
+            current_plugin = self.named_acceptors[acceptor_position]
+            push_func = current_plugin.push_state_message
+        except IndexError:
+            # There are no more acceptors at the given position.
+            # The socket should be reseated or dropped
+            print('Finished all acceptors for', self)
+            push_func = self.dead_letter# (data, websocket, acceptor_position, micro_position)
+
+        try:
+            move_bool, internal_pos = await push_func(micro_position, data, websocket)
+        except Move as err:
+            keep_alive, macro, graph_name, internal_pos, _plug = err.args
+            # self.named_acceptors[graph_name]
+            print(f'Internal move from {acceptor_position} to {graph_name}')
+            move_bool = graph_name
+            # print(f'\nError: {err}')
+
+
+        # if isinstance(internal_pos, bool):
+            # Remap to a key.
+            # internal_pos = acceptor_position
+
+        # acceptor_pos = acceptor_position + int(move_bool)
+        acceptor_pos = move_bool
+        internal_pos = (micro_position or 0) + int(internal_pos)
+
+        if move_bool is False:
+            move_bool = acceptor_position
+
+        self.set_pair_state(move_bool, internal_pos, websocket)
+
+        keep_open = 1
+
+        if move_bool != acceptor_position:
+            print(f"Moving because move_bool={move_bool} != acceptor_position={acceptor_position}")
+            keep_open = await self.step_acceptors(websocket, data, current_plugin, acceptor_pos, internal_pos)
+        return keep_open
+
+    def get_pair_state_default(self) -> tuple:
+        return (next(iter(self.named_acceptors.keys())), None,)
+
+    async def step_acceptors(self, websocket, data, current_plugin, acceptor_pos, internal_pos):
+        """
+            Step from one acceptor to the next after the acceptor_pos has been moved
+            due to the previous plugin. Return a 'keep open' bool.
+
+                keep_open = await self.step_acceptors(
+                                    websocket, data, acceptor_pos, internal_pos)
+
+            The current_plugin was the actioned item to perform the last step request
+            The next plugin _accept_pos_ may not exist.
+
+            If a next plugin is not found call `no_acceptors` and return a keep alive
+            bool.
+        """
+
+        # current_plugin = self.acceptors[acceptor_pos]
+        # The microstate has asked for a release., Announce the closure
+        # and inbound of the websocket.
+        keep_open = await current_plugin.outbound(websocket, data)
+
+        if acceptor_pos is True:
+            # move to the next index.
+            acceptor_pos = current_plugin._index + 1
+
+        if hasattr(current_plugin, 'move_to'):
+            try:
+                acceptor = self.named_acceptors[current_plugin.move_to]
+                print('Acceptor:', current_plugin.move_to, acceptor)
+
+                keep_open, internal_pos = await acceptor.inbound(websocket, last_data=data)
+                print(f'{acceptor}.inbound result: internal new value "{internal_pos}"')
+                self.set_pair_state(acceptor.name, internal_pos, websocket)
+                # self.set_internal_position(internal_pos, websocket)
+            except KeyError:
+                print(f'\n! KeyError for self.named_acceptors[acceptor_pos={acceptor_pos}] for:',current_plugin)
+                # No more future acceptors.
+                keep_open = await self.no_acceptors(current_plugin, internal_pos, acceptor_pos, websocket, data)
+            return keep_open
+
+        try:
+            print('Moving using position. New position ==', acceptor_pos)
+            acceptor = self.acceptors[acceptor_pos]
+            print('acceptor', acceptor)
+            keep_open, internal_pos = await acceptor.inbound(websocket, last_data=data)
+
+            # self.set_internal_position(acceptor.name, websocket)
+
+            # ab = self.get_pair_state(websocket)
+            # self.set_pair_state(acceptor.name, ab[1], websocket)
+            self.set_pair_state(acceptor.name, internal_pos, websocket)
+
+        except IndexError:
+            # No more future acceptors.
+            keep_open = await self.no_acceptors(current_plugin, internal_pos, acceptor_pos, websocket, data)
+
+        return keep_open
+
+"""
+For a more 'graph-like' action, we accept the socket and push it into _named_
+processes. They may release as required, pushing back into the master Lobby
+for stacked actions.
+
+socket:
+    get identity?
+        proceed
+        MicroState ID
+    get room?
+        proceed
+        get ROOM
+            ask?
+                proceed
+                refuse * 3 -> lock
+    enter room
+        proceed:
+            gather/register as user
+        refuse -> backout
+            get room?
+"""
+
+
 class VoidNoState(Lobby):
     """A Mailroom for void messages
     """
@@ -184,17 +346,35 @@ class VoidNoState(Lobby):
 class MicroState(PairStateMixin):
     """A micro state lives within a Lobby to digest incoming functions as a
     group receiving "inbound", _messages_ and "outbound" upon a single websocket
-    per transation,
+    per transation.
 
+    Functionally this acts as a data-function for the websocket, with
+    wrappers for the expected flow of the socket.
+
+    First `inbound(socket)` announces to this plugin the incoming connection,
+    followed by a `push_state_message` or `push_message`.
+    If this is the first message, this function calls to `entry(data)`.
+    Every subsequent message from this socket is sent to`concurrent(data)`.
+
+    If this state has a transistion to another state (such as a lobby or another
+    microstate), the `outbound` is called.
     """
 
     _index = None
     name = 'microstate'
+    release_internal_position = 0
+    init_value = None
+
     def __init__(self, name=None):
         self.name = name or self.name
         self._states = {}
 
     def mount(self, state_machine, index=-1, parent=None):
+        """This plugin has mounted into the assigned state maching at the
+        given `index` position. This microstate may be a child of a `parent`
+        (such as a Lobby). If the parent is the state machine, the given
+        parent is `None`.
+        """
         self._index = index
 
     def pop_state(self):
@@ -212,7 +392,7 @@ class MicroState(PairStateMixin):
         """
         print('Okay,', self.name, ' expecting', owner, 'soon')
         # keep open, new micro_position.
-        return 1, None
+        return 1, self.init_value
 
     async def push_message(self, data, owner):
         """Called by the Manager if this microstate was applied to the
@@ -232,12 +412,15 @@ class MicroState(PairStateMixin):
         keep_open = 1
         a, m = self.get_pair_state(owner)
         # a_pos, micro_pos = self.parent.get_pair_state(owner)
+        print(self, 'Sending m', m)
         move_on, micro_step = await self.push_state_message(m, data, owner)
         m = 0 if m is None else m
         nv = m + int(micro_step)
+
         self.set_internal_position(nv, owner)
+
         release = nv > 5
-        print(self.name, f'send: micro_step={micro_step}. Release:', release)
+        print(self.name, f'new value={nv}: micro_step={micro_step}. Release:', release)
         if release:
             self.release()
         # self.release()
@@ -246,8 +429,7 @@ class MicroState(PairStateMixin):
 
     def release(self):
         #keep_alive, macro, acceptor_pos, internal_pos, _plug = err.args
-        raise Done(1, self, self._index, 0, self)
-
+        raise Done(1, self, self._index, self.release_internal_position, self)
 
     async def push_state_message(self, micro_position, data, owner):
         """A message from the lobby 'push message'. Given this is a sub state
@@ -260,12 +442,11 @@ class MicroState(PairStateMixin):
         # move_on, micro_step = await func(data, owner, micro_position)
         return await func(data, owner, micro_position)
 
-
     async def entry(self, data, owner, micro_position):
         # New socket into this micro state
         #
         # Move forward; current internal state
-        print('New Unit in state', owner, data)
+        print(f'{self} receive entry: micro_position=', micro_position)
         # return False, 0
 
         # In this example, rather than send (False, continue=0), we send
@@ -343,7 +524,6 @@ class StateMachine(object):
             # pl = Pl()
             self.mount_plugin(pl, i-lp)
 
-
     def mount_plugin(self, pl, index):
         ps = pl.pop_state()
         i = index if ps[0] is None else ps[0]
@@ -362,11 +542,15 @@ class StateMachine(object):
         return await pl.inbound(websocket)
 
     async def push_message(self, data, websocket):
-        """ Given a message send to the correct digest function.
+        """Called by the connection.Manager, given a message `data` - send to
+        the correct digest function.
 
                 await state_machine.push_message(data, websocket)
 
             return keep-alive boolean
+
+        Functionally this is the first digest method for a socket and the data
+        all plugin `push_message` routines start here.
         """
         plugin = self.get_current_state_plugin(websocket)
         # run and retrn a bool.
@@ -380,6 +564,18 @@ class StateMachine(object):
 
             print(f'\nPlugin {plugin} raised Done - from: {macro}. Slid:', slid)
 
+            return keep_alive
+        except Move as err:
+            keep_alive, macro, graph_name, internal_pos, _plug = err.args
+
+            _next = self.plugins.get(graph_name)
+            if hasattr(_next, '_index'):
+                new_int = _next._index
+            elif hasattr(_next, 'state_index'):
+                new_int = _next.state_index
+
+            slid = self.set_state_int(websocket, new_int)
+            print('Slid to', slid)
             return keep_alive
 
     def get_current_state_plugin(self, websocket):
@@ -423,8 +619,13 @@ class StateMachine(object):
         return 1
 
     def slide_state_int(self, websocket, add_value=1):
-        _id = id(websocket)
+        """Add the `add_value` integer to the existing state integer.
+        """
         new_state_int = self.get_state_int(websocket) + add_value
+        return self.set_state_int(websocket, new_state_int)
+
+    def set_state_int(self, websocket, new_state_int):
+        _id = id(websocket)
         # v = self._states[_id]
         self._states[_id] = new_state_int
         # self._states[_id] = (new_state_int,) + v[1:]
@@ -449,6 +650,33 @@ class StateMachine(object):
         print(f'No State {_id} == {v}')
         return v
 
+    async def disconnecting_socket(self, websocket, client_id, error):
+        """The socket is closed or forced to close, called by the manager
+
+            await state_machine.disconnect_socket(websocket, client_id, error)
+        """
+
+
+
+class KeyMicroState(MicroState):
+    move_to = 'delta'
+
+    def __init__(self, name=None, move_to='delta', init_value=None, **kw):
+        super().__init__(name)
+        self.move_to = move_to
+        self.init_value = init_value
+        self.kwargs = kw
+
+    def release(self, name=None):
+        # keep_alive, macro, acceptor_pos, internal_pos, _plug = err.args
+        #   raise Done(1, plugin, acceptor_pos, internal_pos, self)
+        raise Move(1, self, name or self.move_to, self.release_internal_position, self)
+        # raise Move(1, self, name or self.move_to)
+
 
 class Done(Exception):
+    pass
+
+
+class Move(Exception):
     pass

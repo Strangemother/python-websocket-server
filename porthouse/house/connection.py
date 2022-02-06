@@ -13,8 +13,46 @@ class Forever(state.MicroState):
         return False, True
 
 
+class Debug(state.KeyMicroState):
+
+    name = 'debug'
+
+    async def push_state_message(self, micro_position, data, owner):
+        move_on = False
+        micro_val = 2
+        import pdb; pdb.set_trace()  # breakpoint 72df0baa //
+
+        return move_on, micro_val
+
+
+class HotMove(state.KeyMicroState):
+
+    async def push_state_message(self, micro_position, data, owner):
+        t = data.get('text', None)
+        if t == self.kwargs.get('text'):
+            self.release()
+
+        # move_on, micro_position inc
+        return False, True
+
+# These plugins define the procedural list a single client should
+# walk. Each step is like a function - but built with an async waiting.
 plugins = (
     state.MicroState(name='BEFORE'),
+    state.KeyMicroState(name='beta', move_to='other', init_value=-3),
+    state.KeyLobby(name='keyarea',
+        # state_index=0,
+        acceptors=(
+            state.MicroState(name='egg'),
+            HotMove(name='fred', text='egg', move_to='cake'),
+            state.KeyMicroState(name='beta', move_to='delta', init_value=-3),
+            state.MicroState(name='charlie'),
+            state.KeyMicroState(name='delta', move_to='charlie'),
+            state.KeyMicroState(name='cake', move_to='debug'),
+            Debug(),
+        )
+     ),
+    state.KeyMicroState(name='other', move_to='keyarea', init_value=1),
     state.Lobby(name='area',
         # state_index=0,
         acceptors=(
@@ -26,7 +64,8 @@ plugins = (
 state_machine = state.StateMachine(plugins,
         entry_acceptors=(
             state.MicroState(name='alpha'),
-            state.MicroState(name='beta'), )
+            state.MicroState(name='beta'),
+        )
     )
 
 # blacklist.add('127.0.0.1')
@@ -54,7 +93,20 @@ async def can_accept_socket(websocket):
 
 
 class Manager(object):
+    """The input manager handles ingress and drops of all docket connections,
+    farmed from the host wsgi function into `master_ingress(websocket)`.
+    A prepared socket is pushed into a async wait loop until a disconnect occurs.
 
+    To use the manager, create a new instance and call the master_ingress or
+    `uuid_ingress` function to initiate a flow on the socket:
+
+        con_manager = connection.Manager(app)
+        await con_manager.mount()
+        await con_manager.master_ingress(websocket)
+
+    The host calling these functions doesn't care about the rest - of which
+    is handled within this manager or the referenced `state_machine`.
+    """
     def __init__(self, app):
 
         print('connection.Manager', app)
@@ -102,6 +154,22 @@ class Manager(object):
 
         return (allow_continue, err)
 
+    async def initial_entry(self, websocket):
+        """The new websocket is requesting access to the network
+        perform an accept() and return the state of the acceptance.
+
+        If False is returned the websocket will drop regardless of the
+        accept() state.
+        """
+        chain_res = await can_accept_socket(websocket)
+        if chain_res:
+            await websocket.accept()
+            try:
+                await state_machine.initial_entry(websocket)
+            except state.Done:
+                print('\n!The state machine resolved Done at entry...')
+        return chain_res
+
     async def loop_wait(self, websocket):
         """With the initial entry for websocket complete, step into a
         forever loop, waiting on content from the receive() method.
@@ -125,26 +193,13 @@ class Manager(object):
         """Data recieved from the client. Process and return a continue
         bool.
         """
-
         return await state_machine.push_message(data, websocket)
-
-    async def initial_entry(self, websocket):
-        """The new websocket is requesting access to the network
-        perform an accept() and return the state of the acceptance.
-
-        If False is returned the websocket will drop regardless of the
-        accept() state.
-        """
-        chain_res = await can_accept_socket(websocket)
-        if chain_res:
-            await websocket.accept()
-            await state_machine.initial_entry(websocket)
-        return chain_res
 
     async def disconnect_socket(self, websocket, client_id=None, error=None):
         """Called automatically or requested through the API to _disconnect_
         the target websocket by sending a close 1000 event.
         """
+        await state_machine.disconnecting_socket(websocket, client_id, error)
         await websocket.close(code=1000)#'I dont wantyou')
 
 
