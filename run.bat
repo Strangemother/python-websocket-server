@@ -1,1 +1,1 @@
-uvicorn host:app --reload --host 0.0.0.0
+uvicorn porthouse.host:app --reload --host 0.0.0.0
