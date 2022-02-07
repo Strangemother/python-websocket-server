@@ -140,3 +140,13 @@ IF the owning connection is dropped, the messages are wiped and replay doesn't o
 Any existing connection in the room will not receive the replay events, as they already received them. Messages after the replay continue to all nodes as normal.
 
 For example a 'rendering' connection opens to serve A - Z actions. The listener recieves all. A new connection attends to recieve A-Z _after_ the messages are played. Node A and B are up-to-date.
+
+
+---
+
+A client id is `id(websocket)`, but is attached to a channel ID of the UUID client id
+All clients gain a UUID once processed; attached to the unique socket.
+Many sockets may use the same ID - known as "cloning"
+
+When a client send a message, its dispatched through the channels graph _from_ the UUID to the target. The graph machinery pushes the message to all _listeners_. If there are not listeners for a message (allocated by target uuid) the message dies in the void.
+
