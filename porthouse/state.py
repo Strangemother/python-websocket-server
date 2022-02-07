@@ -556,6 +556,14 @@ class StateMachine(object):
         # run and retrn a bool.
         try:
             return await plugin.push_message(data, websocket)
+
+        except Release as err:
+            keep_alive = err.args[0] if len(err.args) > 0 else 1
+
+            slid = self.slide_state_int(websocket, keep_alive)
+            print(f'\nPlugin {plugin} raised Release - Slid to:', slid)
+            return keep_alive
+
         except Done as err:
             # should we move or stay
             # raise Done(1, plugin, acceptor_pos, internal_pos, self)
@@ -566,6 +574,7 @@ class StateMachine(object):
 
             return keep_alive
         except Move as err:
+
             keep_alive, macro, graph_name, internal_pos, _plug = err.args
 
             _next = self.plugins.get(graph_name)
@@ -655,7 +664,24 @@ class StateMachine(object):
 
             await state_machine.disconnect_socket(websocket, client_id, error)
         """
+        pass
 
+
+class MicroMachine(object):
+
+    async def initial_entry(self, websocket):
+        self.log('initial_entry', websocket)
+        return True
+
+    async def push_message(self, data, websocket):
+        self.log('push_message', websocket)
+        return True
+
+    async def disconnecting_socket(self, websocket, client_id, error):
+        self.log('disconnecting_socket', websocket)
+
+    def log(*a):
+        print(*a)
 
 
 class KeyMicroState(MicroState):
@@ -675,6 +701,10 @@ class KeyMicroState(MicroState):
 
 
 class Done(Exception):
+    pass
+
+
+class Release(Exception):
     pass
 
 
