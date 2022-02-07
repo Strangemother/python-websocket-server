@@ -5,69 +5,6 @@ from fastapi import WebSocket, WebSocketDisconnect
 from .. import exceptions, state
 from .auth import blacklist
 
-
-class Forever(state.MicroState):
-    async def concurrent(self, data, owner, micro_position):
-        print('F:', data)
-
-        return False, True
-
-
-class Debug(state.KeyMicroState):
-
-    name = 'debug'
-
-    async def push_state_message(self, micro_position, data, owner):
-        move_on = False
-        micro_val = 2
-        import pdb; pdb.set_trace()  # breakpoint 72df0baa //
-
-        return move_on, micro_val
-
-
-class HotMove(state.KeyMicroState):
-
-    async def push_state_message(self, micro_position, data, owner):
-        t = data.get('text', None)
-        if t == self.kwargs.get('text'):
-            self.release()
-
-        # move_on, micro_position inc
-        return False, True
-
-# These plugins define the procedural list a single client should
-# walk. Each step is like a function - but built with an async waiting.
-plugins = (
-    state.MicroState(name='BEFORE'),
-    state.KeyMicroState(name='beta', move_to='other', init_value=-3),
-    state.KeyLobby(name='keyarea',
-        # state_index=0,
-        acceptors=(
-            state.MicroState(name='egg'),
-            HotMove(name='fred', text='egg', move_to='cake'),
-            state.KeyMicroState(name='beta', move_to='delta', init_value=-3),
-            state.MicroState(name='charlie'),
-            state.KeyMicroState(name='delta', move_to='charlie'),
-            state.KeyMicroState(name='cake', move_to='debug'),
-            Debug(),
-        )
-     ),
-    state.KeyMicroState(name='other', move_to='keyarea', init_value=1),
-    state.Lobby(name='area',
-        # state_index=0,
-        acceptors=(
-            Forever(name='FOREVER'),
-        )
-     ),
-)
-
-state_machine = state.StateMachine(plugins,
-        entry_acceptors=(
-            state.MicroState(name='alpha'),
-            state.MicroState(name='beta'),
-        )
-    )
-
 # blacklist.add('127.0.0.1')
 
 ## A list of acceptance modules.
@@ -107,9 +44,9 @@ class Manager(object):
     The host calling these functions doesn't care about the rest - of which
     is handled within this manager or the referenced `state_machine`.
     """
-    def __init__(self, app):
-
-        print('connection.Manager', app)
+    def __init__(self, state_machine):
+        print('connection.Manager', state_machine)
+        self.state_machine = state_machine
 
     async def mount(self):
         """mount the manager as the (FastAPI) interface is loaded.
@@ -143,16 +80,13 @@ class Manager(object):
         Return a tuple of (bool, err) for success. If the success bool is true
         the error is none.
         """
-        err = None
-        allow_continue = False
+        error = None
         try:
             allow_continue = await self.initial_entry(websocket)
-
-        except exceptions.EntryException as error:
+        except exceptions.EntryException as err:
             allow_continue = False
-            err = error
-
-        return (allow_continue, err)
+            error = err
+        return (allow_continue, error)
 
     async def initial_entry(self, websocket):
         """The new websocket is requesting access to the network
@@ -165,7 +99,7 @@ class Manager(object):
         if chain_res:
             await websocket.accept()
             try:
-                await state_machine.initial_entry(websocket)
+                await self.state_machine.initial_entry(websocket)
             except state.Done:
                 print('\n!The state machine resolved Done at entry...')
         return chain_res
@@ -174,32 +108,56 @@ class Manager(object):
         """With the initial entry for websocket complete, step into a
         forever loop, waiting on content from the receive() method.
         """
-        error = None
-        allow_continue = 1
         try:
-            while allow_continue:
-                if websocket.client_state.value == 0: break
-
-                data = await websocket.receive()
-                allow_continue = await self.receive(data, websocket)
-                # print('-> allow_continue', allow_continue)
+            error = await self._while_allow_continue(websocket)
         except WebSocketDisconnect as err:
-            print('Client disconnect', err)
+            print('Client disconnect:', err)
             error = err
             # await self.disconnect_socket(websocket, client_id)
+        return error
+
+    async def _while_allow_continue(self, websocket):
+        allow_continue = 1
+        error = None
+
+        while allow_continue:
+
+            if websocket.client_state.value == 1:
+                data = await websocket.receive()
+                allow_continue = await self.receive(data, websocket)
+                continue
+
+            # The if statement failed; the client is 0 or 2
+            error = 'Disconnect by client'
+
+            if websocket.client_state.value == 2:
+                # The client disonnected with a 'close'
+                print(f'\n{error}\n')
+
+            ## We could raise a disconnect, with a custom message
+            ## or inherited.
+            raise WebSocketDisconnect(error) # from err
+
+            ## Or we could return with an error entity,
+            # return error
+
+            ## Or Regardless of the return or raise, we can simply kill the
+            ## loop, and fill the error string
+            allow_continue = 0
+
         return error
 
     async def receive(self, data, websocket):
         """Data recieved from the client. Process and return a continue
         bool.
         """
-        return await state_machine.push_message(data, websocket)
+        return await self.state_machine.push_message(data, websocket)
 
     async def disconnect_socket(self, websocket, client_id=None, error=None):
         """Called automatically or requested through the API to _disconnect_
         the target websocket by sending a close 1000 event.
         """
-        await state_machine.disconnecting_socket(websocket, client_id, error)
+        await self.state_machine.disconnecting_socket(websocket, client_id, error)
         await websocket.close(code=1000)#'I dont wantyou')
 
 
