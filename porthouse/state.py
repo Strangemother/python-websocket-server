@@ -384,11 +384,11 @@ class MicroState(PairStateMixin):
         return f'<{self.__class__.__name__} {self.name}#{self._index}>'
 
     async def inbound(self, owner, last_data=None):
-        """Called before the microstate is active, after the last state is released
-        before any _entry_ messages.
+        """Called before the microstate is active, after the last state is
+        released before any _entry_ messages.
 
-        Return the 'keep open' state of the socket. If false or 0 is returned the
-        socket will close 1000
+        Return the 'keep open' state of the socket. If false or 0 is returned
+        the socket will close 1000.
         """
         print('Okay,', self.name, ' expecting', owner, 'soon')
         # keep open, new micro_position.
@@ -484,6 +484,69 @@ class MicroState(PairStateMixin):
 # )
 
 
+class EnvelopePlugin(MicroState):
+
+    def __init__(self, items=None, name=None):
+        super().__init__(name)
+        self.envelopes = items or ()
+
+    def add(self, envelope):
+        self.envelope += envelope
+
+    async def initial_entry(self, websocket):
+        # dope the new socket with _this_ envelope.
+        websocket.assign_envelope(self)
+
+        can_accept = True
+        for env in self.envelopes:
+            can_accept = await env.initial_entry(websocket)
+            if can_accept:
+                continue
+            return can_accept
+
+        return can_accept
+
+    async def push_message(self, data, owner):
+        # loop all internal envelopes and return the finished data
+        last = data
+        for env in self.envelopes:
+            last = await env.push_message(last, owner)
+        return last
+
+    async def disconnecting_socket(self, websocket, client_id, error):
+        """The socket is closed or forced to close, called by the manager
+
+            await state_machine.disconnect_socket(websocket, client_id, error)
+        """
+        for env in self.envelopes:
+            await env.disconnecting_socket(websocket, client_id, error)
+
+    async def outbound(self, data, owner):
+        """A Message out from the internal _send_ through the PortWebSocket
+        """
+        return data
+
+    async def inbound(self, message, owner):
+        """
+        A Message inbound from the port socket receiver - likely pushed from
+        the PortWebSocket.
+        """
+        return await self.push_message(message, owner)
+
+
+class Envelope(object):
+    # A single plugin to read in, out
+    async def initial_entry(self, owner):
+        return True
+
+    async def push_message(self, data, owner):
+        print('  Envelope', data)
+        return data
+
+    async def disconnecting_socket(self, websocket, client_id, error):
+        pass
+
+
 class StateMachine(object):
     """The State Machine holds all information about the sockets. Using
     a single `get_state(websocket)` on a plugin returns current state for
@@ -493,7 +556,7 @@ class StateMachine(object):
     _move_ the socket into the next state when released.
     """
 
-    def __init__(self, user_plugins=None, entry_acceptors=None):
+    def __init__(self, user_plugins=None, entry_acceptors=None, envelopes=None):
         print('New State Machine')
         # Key to int mapping.
         self._states = {}
@@ -503,6 +566,7 @@ class StateMachine(object):
         self.plugins = {}
         self.entry_acceptors = entry_acceptors or ()
         self.mount_plugins(user_plugins)
+        self.envelope = EnvelopePlugin(envelopes)
 
     def get_core_plugins(self):
         return (
@@ -539,6 +603,7 @@ class StateMachine(object):
         we inform the 'inbound' of the mounted plugins for the first plugin.
         """
         pl = self.get_current_state_plugin(websocket)
+        await self.envelope.initial_entry(websocket)
         return await pl.inbound(websocket)
 
     async def push_message(self, data, websocket):
@@ -555,8 +620,8 @@ class StateMachine(object):
         plugin = self.get_current_state_plugin(websocket)
         # run and retrn a bool.
         try:
-            return await plugin.push_message(data, websocket)
-
+            envelope = await self.envelope.push_message(data, websocket)
+            return await plugin.push_message(envelope, websocket)
         except Release as err:
             keep_alive = err.args[0] if len(err.args) > 0 else 1
 
@@ -664,7 +729,8 @@ class StateMachine(object):
 
             await state_machine.disconnect_socket(websocket, client_id, error)
         """
-        pass
+        await self.envelope.disconnecting_socket(websocket, client_id, error)
+
 
 
 class MicroMachine(object):

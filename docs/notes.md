@@ -18,3 +18,16 @@ This makes it easy to quickly dispatch to mutlple channels or active a channel i
 # Listeners
 
 For every UUID (websocket) is assigned to a true _client_ and its allowed internals. The client may send and recieve messages to target clients. a client may nominate to _listen_ to a uuid - such as a peering chat or service channel.
+
+
+---
+
+
+The 'entry flow' should allow a user to allocate their identity to a socket, given the header sequences within the state machine. Once resolved (All required params are met), the socket is designated an internal identity, allowing the entry to a room. The room manages all concurrent messages and any channels within.
+
+1. Access the network
+2. Discover Identity
+3. Move to a room
+
+
+As the new connection is allocated a persistent ID; we can monitor this one 'user channel' for all incoming connections.

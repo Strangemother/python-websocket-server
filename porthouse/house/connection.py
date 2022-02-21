@@ -14,7 +14,6 @@ ACCEPT_PLUGINS = (
     )
 
 
-
 async def can_accept_socket(websocket):
     """Given a websocket, run through the accept phase to ensure all pre-auth steps
     are true
@@ -27,11 +26,16 @@ async def can_accept_socket(websocket):
 
     return True
 
+MANAGERS = {}
+
+def get_manager_by_id(mid):
+    return MANAGERS[mid]
 
 
 class Manager(object):
     """The input manager handles ingress and drops of all docket connections,
     farmed from the host wsgi function into `master_ingress(websocket)`.
+
     A prepared socket is pushed into a async wait loop until a disconnect occurs.
 
     To use the manager, create a new instance and call the master_ingress or
@@ -44,9 +48,20 @@ class Manager(object):
     The host calling these functions doesn't care about the rest - of which
     is handled within this manager or the referenced `state_machine`.
     """
+    clients = None
+
     def __init__(self, state_machine):
+        MANAGERS[id(self)] = self
         print('connection.Manager', state_machine)
+        self.clients = {}
+
+        state_machine.manager_id = id(self)
         self.state_machine = state_machine
+
+
+    def get_clients(self):
+        # return tuple(self.clients.keys())
+        return self.clients
 
     async def mount(self):
         """mount the manager as the (FastAPI) interface is loaded.
@@ -70,8 +85,8 @@ class Manager(object):
             err = await self.loop_wait(websocket)
 
         client_id = id(websocket)
-        print(f'Signal close receive of {client_id}: Error: {err}')
-        await self.disconnect_socket(websocket, client_id, err)
+        print(f'Manager.master_ingress: Signal close receive of {client_id}: Error: {err}')
+        await self.disconnect_socket(websocket, None, err)
 
     async def run_entry(self, websocket):
         """Perform the initial entry before the socket is pushed into the
@@ -89,20 +104,42 @@ class Manager(object):
         return (allow_continue, error)
 
     async def initial_entry(self, websocket):
-        """The new websocket is requesting access to the network
-        perform an accept() and return the state of the acceptance.
+        """Called by `self.run_entry()` with the new socket - of which needs
+        accepting.
+
+        The new websocket is requesting access to the network perform an
+        accept() and return the state of the acceptance.
 
         If False is returned the websocket will drop regardless of the
         accept() state.
         """
         chain_res = await can_accept_socket(websocket)
+        can_accept = False
+
         if chain_res:
-            await websocket.accept()
             try:
-                await self.state_machine.initial_entry(websocket)
-            except state.Done:
-                print('\n!The state machine resolved Done at entry...')
+                can_accept = await self.state_machine.initial_entry(websocket)
+            except state.Done as err:
+                can_accept = err.args[0]
+                print('\n!The state machine resolved Done at entry. Keep open ==', can_accept)
+
+            if can_accept:
+                # print('\n\nconnection.Manager.first_mount\n\n')
+                # websocket.first_mount(self)
+                await websocket.accept()
+                # websocket._manager = self
+                await self.append_client(websocket)
+                await self.state_machine.accepted(websocket)
+            else:
+                print('Initial Entry did not accept socket.', websocket)
+
         return chain_res
+
+    async def append_client(self, websocket):
+        self.clients[websocket.get_id()] = websocket
+
+    async def remove_client(self, websocket):
+        del self.clients[websocket.get_id()]
 
     async def loop_wait(self, websocket):
         """With the initial entry for websocket complete, step into a
@@ -111,12 +148,18 @@ class Manager(object):
         try:
             error = await self._while_allow_continue(websocket)
         except WebSocketDisconnect as err:
-            print('Client disconnect:', err)
+            print('connection.Manager.loop_wait: Client disconnect:', err)
             error = err
             # await self.disconnect_socket(websocket, client_id)
         return error
 
     async def _while_allow_continue(self, websocket):
+        """Wait forever upon the websocket.receive(). Call to `self.receive`
+        with incoming data packets.
+
+        If the intern receive call returns False, the loop will close -
+        disconnecting the client.
+        """
         allow_continue = 1
         error = None
 
@@ -128,11 +171,11 @@ class Manager(object):
                 continue
 
             # The if statement failed; the client is 0 or 2
-            error = 'Disconnect by client'
+            error = 'connection.Manager: Disconnect by client'
 
             if websocket.client_state.value == 2:
                 # The client disonnected with a 'close'
-                print(f'\n{error}\n')
+                print(f'\nManager._while_allow_continue disconnect announced: {error}\n')
 
             ## We could raise a disconnect, with a custom message
             ## or inherited.
@@ -158,6 +201,6 @@ class Manager(object):
         the target websocket by sending a close 1000 event.
         """
         await self.state_machine.disconnecting_socket(websocket, client_id, error)
+        await self.remove_client(websocket)
         await websocket.close(code=1000)#'I dont wantyou')
-
 
