@@ -25,6 +25,10 @@ class PortWebSocket(starlette.websockets.WebSocket):
     home_state = 0
     history_stack = None
 
+    # Any extra arguments given through set_init_options
+    # at point of creation.
+    init_options = None
+
     def get_id(self):
         return id(self)
 
@@ -52,6 +56,9 @@ class PortWebSocket(starlette.websockets.WebSocket):
             print('\nPortwebsoket envelope does not exist.')
 
         return message
+
+    def set_init_options(self, options):
+        self.init_options = options
 
     def stack_append(self, home_state):
         """Called by a lockstate to store the given str to the placement

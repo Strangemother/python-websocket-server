@@ -31,6 +31,7 @@ class DefaultMessage(object):
 class CustomMessage(DefaultMessage):
     pass
 
+
 class MessageCast(Envelope):
     # A single plugin to read in, out
     # async def initial_entry(self, owner):
@@ -44,7 +45,6 @@ class MessageCast(Envelope):
         # print('  Envelope Response', m)
 
         return m
-
 
 
 Message = conf.resolve('MESSAGE_CLASS', DefaultMessage)

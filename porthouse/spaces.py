@@ -43,7 +43,6 @@ class LockSpace(object):
     async def message(self, data: typing.Any, websocket: PortWebSocket) -> bool:
         print(f'{self}.message', data)
 
-
     async def close_message(self, data: typing.Any, websocket: PortWebSocket) -> bool:
         """Call this method if a message is type 'disconnect' rather than
         a standard 'message'.
@@ -128,6 +127,11 @@ class IdentifierLockSpace(LockSpace):
     """
     home_state = 'id'
 
+    def __init__(self, channels=None, next_place=None):
+        # self.clients = set()
+        self.next_place = next_place
+        self.channels = channels or {}
+
     async def connected(self, websocket: PortWebSocket) -> bool:
         # send welcome. Ask for ID.
         await websocket.send_text('Hello. Please present your ID.')
@@ -140,20 +144,13 @@ class IdentifierLockSpace(LockSpace):
             # TODO: Authing.
             if await self.exists(_id):
                 websocket._client_id = _id
-                place = 'delivery'
+                place = self.next_place or 'delivery'
                 return await self.release_to(name=place, websocket=websocket)
 
         print(f'{self}.message', data)
 
     async def exists(self, name):
-        return name in CHANNELS
-
-
-# Internal Channels, mapping IDS to profiles, and other channels.
-CHANNELS = {
-    'egg': { 'name': 'Dave' },
-    'poppy': { 'name': 'Eric' },
-}
+        return name in self.channels
 
 
 class ClientKnowledge(object):
@@ -166,7 +163,7 @@ class ClientKnowledge(object):
 
 
     def get_client_channel_data(self, client_id):
-        unit = CHANNELS.get(client_id)
+        unit = self.channels.get(client_id)
         return unit
 
     def scrub_client(self, websocket: PortWebSocket) -> None:
@@ -175,16 +172,17 @@ class ClientKnowledge(object):
         self.clients.remove(socket_id)
 
 
-class ChannelDeliveryLockSpace(LockSpace, ClientKnowledge):
+class BroadcastLockSpace(LockSpace, ClientKnowledge):
     """Input messages head to a channel.
 
     Consider  this a raw message delivery to every connected client.
     The information sent to all sockets, is the same as the content received
     """
-    home_state = 'delivery'
+    home_state = 'broadcast'
 
-    def __init__(self):
+    def __init__(self, channels=None):
         self.clients = set()
+        self.channels = channels or {}
 
     async def get_clients(self, ids=None):
         """Override the parent to return a list of resolved client <sockets>
@@ -199,14 +197,18 @@ class ChannelDeliveryLockSpace(LockSpace, ClientKnowledge):
 
         Return False to drop the socket.
         """
-        _client_id = websocket._client_id
+        wid = websocket.get_id()
+        _client_id = getattr(websocket,'_client_id', wid)
         self.add_client(websocket)
 
-        name = self.get_client_channel_data(_client_id)['name']
+        channel_data = self.get_client_channel_data(_client_id)
+        name = wid
+        if channel_data:
+            name = channel_data['name']
 
-        s = ('\nDelivery room received new client '
-            f'(#{len(self.clients)}): {_client_id}, {name}\n')
-        print(s)
+            s = ('\nDelivery room received new client '
+                f'(#{len(self.clients)}): {_client_id}, {name}\n')
+            print(s)
 
         await websocket.send_text(f'Hello - {name}')
 
@@ -219,7 +221,7 @@ class ChannelDeliveryLockSpace(LockSpace, ClientKnowledge):
         self.scrub_client(websocket)
 
     async def message(self, message: typing.Any, websocket: PortWebSocket) -> bool:
-        print('Message from', websocket._client_id, message)
+        # print('Message from', websocket._client_id, message)
         # Convert the message to an _output_
         d = message._message
         d['type'] = 'websocket.send'
@@ -237,6 +239,10 @@ class ChannelDeliveryLockSpace(LockSpace, ClientKnowledge):
         print(f'\nChannels heard close with {data}')
         self.scrub_client(websocket)
         print('client count now:', len(self.clients))
+
+
+class ChannelDeliveryLockSpace(BroadcastLockSpace):
+    home_state = 'delivery'
 
 
 class Sibling(LockSpace):

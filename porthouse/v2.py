@@ -15,25 +15,7 @@ from .house.connection import get_manager_by_id
     #     pass
 
 
-class Machine2(state.MicroMachine):
-    """Inherit the micromachine to action the raw 3
-    """
-    manager_id = None
-    init_home_state = 0
-
-    def __init__(self, envelopes=None, live=None):
-        envelopes = envelopes or ()
-        self.live = live or ()
-        self.mount_placements()
-        self.envelope = state.EnvelopePlugin(envelopes)
-
-        self.funcmap = {
-                    'websocket.receive': self.message,
-                    'websocket.disconnect': self.close_message,
-                }
-
-    def get_clients(self):
-        return get_manager_by_id(self.manager_id).clients
+class LockSpaceManager(state.MicroMachine):
 
     def mount_placements(self):
         # items to run
@@ -48,23 +30,6 @@ class Machine2(state.MicroMachine):
 
         self.placements = placements
 
-    async def initial_entry(self, websocket: PortWebSocket) -> bool:
-        # print('\nAssigning envelope\n')
-        websocket.envelope = self.envelope
-        return websocket.first_mount(self, self.init_home_state)
-        # await self.envelope.initial_entry(websocket)
-        # return await self.connected(websocket)
-
-    async def accepted(self, websocket: PortWebSocket) -> bool:
-        # await self.envelope.initial_entry(websocket)
-        return await self.connected(websocket)
-
-    async def push_message(self, data: typing.Any, websocket: PortWebSocket) -> bool:
-        return await self.funcmap.get(data['type'])(data, websocket)
-
-    async def disconnect_socket(self, websocket: PortWebSocket, client_id=None, error=None):
-        return await self.close(error, websocket)
-
     def resolve_lockspace(self, other):
         if isinstance(other, spaces.LockSpace) is False:
             other = self.placements.get(other, None)
@@ -73,40 +38,6 @@ class Machine2(state.MicroMachine):
                 raise MissingState(other)
             return other
 
-    async def connected(self, websocket: PortWebSocket) -> bool:
-        # print(self, 'connected')
-        res = await self.call_all(websocket.home_state, 'connected', websocket)
-        return False not in res
-
-    async def message(self, data: typing.Any, websocket: PortWebSocket) -> bool:
-
-        # move into the _room_ designated in the socket state data.
-        # If the room does not exist, move to Limbo.
-        try:
-            # data = await websocket.push_message(data)
-            res = await self.call_all(websocket.home_state, 'message', data, websocket)
-            return False not in res
-        except MissingState:
-            return False
-
-    async def close_message(self, data: typing.Any, websocket: PortWebSocket) -> bool:
-
-        # move into the _room_ designated in the socket state data.
-        # If the room does not exist, move to Limbo.
-
-        # data = await websocket.push_message(data)
-        await self.call_all(websocket.home_state, 'close_message', data, websocket)
-
-    async def close(self, err, websocket: PortWebSocket) -> None:
-
-        """
-        # TODO: Unwind the socket history stack here, calling to
-        all _historical_ LockSpaces. Announce to each the closure of this
-        socket, allowing scrubbing up through the graph.
-
-        At the moment, this calls the the _current_ home_state.
-        """
-        await self.call_all(websocket.home_state, 'closed', err, websocket)
 
     async def call_all(self, home_state, method_name, *args, **kwargs) -> bool:
 
@@ -174,3 +105,93 @@ class Machine2(state.MicroMachine):
 
         return res
 
+
+
+class Machine2(LockSpaceManager):
+    """Inherit the micromachine to action the raw 3
+    """
+    manager_id = None
+    init_home_state = 0
+
+    def __init__(self, envelopes=None, live=None):
+        envelopes = envelopes or ()
+        self.live = live or ()
+        self.funcmap = {
+                    'websocket.receive': self.message,
+                    'websocket.disconnect': self.close_message,
+                }
+
+        self.mount_placements()
+        self.envelope = state.EnvelopePlugin(envelopes)
+
+    def get_clients(self):
+        return get_manager_by_id(self.manager_id).clients
+
+    async def mount(self):
+        for pl in self.live:
+            await pl.mount()
+
+    async def initial_entry(self, websocket: PortWebSocket) -> bool:
+        # print('\nAssigning envelope\n')
+        websocket.envelope = self.envelope
+        return websocket.first_mount(self, self.init_home_state)
+        # await self.envelope.initial_entry(websocket)
+        # return await self.connected(websocket)
+
+    async def accepted(self, websocket: PortWebSocket) -> bool:
+        # await self.envelope.initial_entry(websocket)
+        return await self.connected(websocket)
+
+    async def connected(self, websocket: PortWebSocket) -> bool:
+        # print(self, 'connected')
+        res = await self.call_all(websocket.home_state, 'connected', websocket)
+        return False not in res
+
+    async def push_message(self, data: typing.Any, websocket: PortWebSocket) -> bool:
+        """Called by the connection manager upon a new incoming message.
+
+        Gather and execute the correct mapped function relative to the
+        `data.type` - calling method `message` or `close_message`.
+
+        Return the result from either method.
+        """
+        return await self.funcmap.get(data['type'])(data, websocket)
+
+    async def message(self, data: typing.Any, websocket: PortWebSocket) -> bool:
+        """Digest the incoming packet of data.type == 'receive', called by the
+        connection manager through `push_message`.
+
+        Run the current home_state message methods.
+
+        return the result from the call_all method.
+        """
+        # move into the _room_ designated in the socket state data.
+        # If the room does not exist, move to Limbo.
+        try:
+            # data = await websocket.push_message(data)
+            res = await self.call_all(websocket.home_state, 'message', data, websocket)
+            return False not in res
+        except MissingState:
+            return False
+
+    async def close_message(self, data: typing.Any, websocket: PortWebSocket) -> bool:
+
+        # move into the _room_ designated in the socket state data.
+        # If the room does not exist, move to Limbo.
+
+        # data = await websocket.push_message(data)
+        await self.call_all(websocket.home_state, 'close_message', data, websocket)
+
+    async def disconnect_socket(self, websocket: PortWebSocket, client_id=None, error=None):
+        return await self.close(error, websocket)
+
+    async def close(self, err, websocket: PortWebSocket) -> None:
+
+        """
+        # TODO: Unwind the socket history stack here, calling to
+        all _historical_ LockSpaces. Announce to each the closure of this
+        socket, allowing scrubbing up through the graph.
+
+        At the moment, this calls the the _current_ home_state.
+        """
+        await self.call_all(websocket.home_state, 'closed', err, websocket)

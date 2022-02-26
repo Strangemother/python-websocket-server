@@ -53,11 +53,16 @@
 
                 <div class="message-writer-container flex-across">
 
-                    <input
+                    <!-- <input
                         type="text"
                         @keyup.enter='sendCurrent'
                         v-model='messageText'
-                        autocomplete="off"/>
+                        autocomplete="off"/> -->
+
+                    <textarea
+                        @keyup.ctrl.enter='sendCurrent'
+                        v-model='messageText'/>
+                    </textarea>
 
                     <button class="send-button" @click=sendCurrent>send</button>
                 </div>

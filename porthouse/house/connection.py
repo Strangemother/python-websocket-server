@@ -67,6 +67,7 @@ class Manager(object):
         """mount the manager as the (FastAPI) interface is loaded.
         """
         print('async Manager.mount')
+        await self.state_machine.mount()
 
     async def uuid_ingress(self, websocket, uuid):
         """The websocket attached through a uuid named socket.
@@ -76,10 +77,14 @@ class Manager(object):
         websocket.client_uuid = uuid
         await self.master_ingress(websocket)#, uuid)
 
-    async def master_ingress(self, websocket):
+    async def service_ingress(self, websocket, **options):
+        return await self.master_ingress(websocket, **options)
+
+    async def master_ingress(self, websocket, **options):
         """The websocket came through the main / endpoint -
         designated unsafe until moved into a safe lobby.
         """
+        websocket.set_init_options(options)
         allow_continue, err = await self.run_entry(websocket)
         if allow_continue:
             err = await self.loop_wait(websocket)
