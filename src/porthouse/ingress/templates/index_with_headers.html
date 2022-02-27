@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Chat</title>
+    </head>
+    <body>
+
+        <div id="index_app">
+            <h1>WebSocket Chat</h1>
+
+            <button @click=requestConnect>Connect All</button>
+            <button @click=disconnectAll>Disconnect All</button>
+            <button @click=requestClear>Clear All</button>
+
+            <input type="text" v-model='initCount'/>
+            <button @click=addCount>Add Count</button>
+            <button @click=setCount>Set Count</button>
+
+            <div class="broadcast-client">
+                <input
+                    type="text"
+                    @keyup.enter='sendAll'
+                    v-model='messageText'
+                    autocomplete="off"/>
+
+                <button class="send-button" @click=sendAll>send</button>
+            </div>
+
+            <ul class="clients">
+                <li class="client-container" v-for='initData in clients'>
+                    <client :initial=initData></client>
+                </li>
+            </ul>
+        </div>
+
+        <div class="templates">
+
+            <div class="headers">
+            </div>
+
+            <div class='client'>
+
+                <div class="flex-across">
+                    <div class="status-icon" :class='{connected: connected}'></div>
+
+                    <input
+                        type="text"
+                        v-model='liveUrl'
+                        autocomplete="off"/>
+
+                    <div class="connect-toggle">
+                        <button v-if='connected' @click='disconnectSocket'>Disconnect</button>
+                        <button v-else @click='createSocket'>Connect</button>
+                    </div>
+                </div>
+
+                <div class="message-writer-container flex-across">
+
+                    <!-- <input
+                        type="text"
+                        @keyup.enter='sendCurrent'
+                        v-model='messageText'
+                        autocomplete="off"/> -->
+                    <div class="flex-down">
+
+                        <textarea
+                            class='grow-1'
+                            v-model='headerText'/>
+                        </textarea>
+                        <div class="flex-across">
+                            <textarea
+                                class='grow-1'
+                                @keyup.ctrl.enter='sendCurrent'
+                                v-model='messageText'/>
+                            </textarea>
+                            <button class="send-button" @click=sendCurrent>send</button>
+                        </div>
+                    </div>
+
+                </div>
+
+                <div class="message-container">
+                    <ul class="messages pad-0 margin-0 no-style flex-down reverse">
+                        <li class="message"
+                                v-for='m in messages'>
+                            <div class="socket-message pad-point-3"
+                                    :class="[m.direction]">
+                                {% raw %}
+                                <div class="flex-across gap-point-3">
+
+                                    <div class="flex-down">
+                                        <div class="direction" :class='m.direction'>{{ m.direction }}</div>
+                                        <div class="count" :class='m.count == 0? "zero": "multiple"'>{{ m.count + 1}}</div>
+                                    </div>
+                                    <div class="value">
+                                    {{ m.value != undefined ? m.value: m }}
+                                    </div>
+                                {% endraw %}
+                                </div>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+        </div>
+
+        <script src="static/js/vendor/jquery-3.6.0.min.js"></script>
+        <script src="/static/js/vendor/vue.global.js"></script>
+
+        <script src="/static/js/events.js"></script>
+        <script src="/static/js/index_app.js"></script>
+
+        <script src="/static/js/main.js"></script>
+
+        <link rel="stylesheet" href="/static/css/base.css">
+    </body>
+</html>
